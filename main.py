@@ -5,7 +5,7 @@ from disnake.ext import commands
 import os
 from dotenv import load_dotenv
 
-load_dotenv("token.env")
+load_dotenv(".env")
 
 
 def main():
