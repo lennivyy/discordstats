@@ -1,32 +1,35 @@
-# docker-compose.yml
+# /home/discordstats/docker-compose.yml
 
 volumes:
-  autopull_work: {}
+  autopull_work: {}   # можно удалить, если не нужен локальный кэш репо
 
 services:
   git-puller:
     build:
       context: .
       dockerfile: autopull/Dockerfile.autopull
+    image: discordstats/git-puller:latest
     working_dir: /work
     environment:
-      # --- репозиторий ---
+      # --- репозиторий (если он нужен автопуллеру; можно указать свой) ---
       GIT_URL: "${REPO_URL:-https://github.com/lennivyy/discordstats.git}"
       GIT_BRANCH: "${REPO_BRANCH:-main}"
       GIT_LOGIN: "${GIT_LOGIN:-}"
       GIT_TOKEN: "${GIT_TOKEN:-}"
 
-      # --- реальный путь к compose-файлу ---
+      # --- путь к реальному compose на хосте ---
       COMPOSE_FILE_PATH: "/home/discordstats/docker-compose.yml"
 
       # --- поведение ---
       POLL_INTERVAL: "20"
       AUTO_BUILD_ON_START: "0"
       AUTOPULL_VERBOSE: "1"
+      AUTOPULL_COLOR: "1"
+      # DOCKER_COMPOSE_CMD: "docker compose"
     volumes:
       - autopull_work:/work
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/discordstats:/home/discordstats   # чтобы контейнер видел compose-файл
+      - /home/discordstats:/home/discordstats   # ключевое: чтобы env_file и относительные пути из compose работали
     restart: unless-stopped
     init: true
     healthcheck:
@@ -35,19 +38,18 @@ services:
       timeout: 3s
       retries: 10
 
-
   discord-bot:
     build:
       context: .
       dockerfile: Dockerfile
+    image: discordstats/discord-bot:latest
     env_file:
-      - ./token.env
+      - ./token.env             # резолвится относительно /home/discordstats (compose dir)
     environment:
-      # Соединяемся с bridge по внешней сети "brigde"
       MC_WS_URL: ws://bridge:8765
       MC_REALM: anarchy
 
-      # Диагностика / поведение
+      # Логи/поведение
       MC_WS_DEBUG: "1"
       MC_WS_LOG_JSON: "1"
       MC_WS_TRUNC: "600"
@@ -58,14 +60,11 @@ services:
       MC_TPS_CHANGE_EPS: "0.05"
       MC_MSPT_CHANGE_EPS: "0.05"
 
-      # Фиксированные ID каналов (если уже известны)
+      # Каналы
       MC_ONLINE_CHANNEL_ID: "1434239560526856242"
       MC_TPS_CHANNEL_ID: "1434239613282680934"
-
-      # Если bridge требует токен, положи его в token.env как MC_WS_TOKEN
-      # (env_file его подхватит автоматически)
     volumes:
-      - ./token.env:/app/token.env:ro
+      - ./token.env:/app/token.env:ro  # только боту
     restart: unless-stopped
     networks:
       - brigde
