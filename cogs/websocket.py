@@ -368,9 +368,9 @@ class MinecraftCog(commands.Cog):
         if s.get("online"):
             p = _to_int(s.get("players", 0))
             m = _to_int(s.get("max_players", 0))
-            base = f"🟢 MC {realm}: {p}/{m}" if m else f"🟢 MC {realm}: {p}"
+            base = f"🟢 Онлайн: {p}" if m else f"🟢 Онлайн: {p}"
         else:
-            base = f"🔴 MC {realm}: оффлайн"
+            base = f"🔴 Выключен"
         return base[:95]
 
     def _build_tps_name(self) -> str:
@@ -379,11 +379,11 @@ class MinecraftCog(commands.Cog):
         tps_1m = _to_float(s.get("tps_1m"))
         mspt = _to_float(s.get("mspt"))
         if not s.get("online"):
-            name = f"⚙️ TPS {realm}: оффлайн"
+            name = f"⚙️ TPS: Отсуствует"
         else:
             tps_part = f"{tps_1m:.1f}" if tps_1m is not None else "—"
             mspt_part = f" | {mspt:.2f} mspt" if (self.CHANNEL_SHOW_MSPT and mspt is not None) else ""
-            name = f"⚙️ TPS {realm}: {tps_part}{mspt_part}"
+            name = f"⚙️ TPS Сервера: {tps_part}"
         return name[:95]
 
     async def _update_channel_name_now(self, kind: str, force: bool = False):
