@@ -1,27 +1,27 @@
-FROM python:3.11-slim
+# Используем тонкий базовый образ Python
+FROM python:3.12-slim
 
-WORKDIR /app
+# Без буферов и *.pyc
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+# Невредные системные обновления (по желанию можно убрать)
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Копирование requirements и установка зависимостей
+# Создаём непривилегированного пользователя
+RUN useradd -m appuser
+WORKDIR /app
+
+# Устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копирование исходного кода
+# Копируем исходники (без секретов — см. .dockerignore)
 COPY . .
 
-# Создание пользователя для безопасности
-RUN groupadd -r discordbot && useradd -r -g discordbot discordbot
-RUN chown -R discordbot:discordbot /app
-USER discordbot
+# Переходим на непривилегированного пользователя
+USER appuser
 
-# Переменные окружения
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-
+# Запускаем бота
 CMD ["python", "main.py"]
