@@ -1,16 +1,32 @@
 services:
   discord-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # НЕ указываем image, чтобы Compose не лез за ним до сборки
-    env_file:
-      - ./token.env
+    build: {context: ., dockerfile: Dockerfile}
+    env_file: [./token.env]
+    environment:
+      # Идём к сервису bridge в сети brigde
+      MC_WS_URL: ws://bridge:8765
+      MC_WS_LOG_JSON: "1"
+      MC_REALM: anarchy
+      MC_WS_DEBUG: "1"      # включаем подробные логи
+      MC_WS_TRUNC: "600"
+      MC_WS_HEARTBEAT_SEC: "1"
+      MC_IDLE_RECONNECT_SEC: "120"
+      MC_CHANNEL_UPDATE_MIN_SEC: "10"
+      MC_CHANNEL_SHOW_MSPT: "1"    # максимум символов сырого JSON в превью (опционально)
+      MC_ONLINE_CHANNEL_ID: "1434239560526856242"
+      MC_TPS_CHANNEL_ID: "1434239613282680934"
+      MC_FORCE_UPDATE_ON_CHANGE: "1"
+      MC_TPS_CHANGE_EPS: "0.05"
+      MC_MSPT_CHANGE_EPS: "0.05"
+      # MC_WS_TOKEN возьмите из token.env, если бридж требует токен:
+      # MC_WS_TOKEN=SUPER_SECRET
     volumes:
       - ./token.env:/app/token.env:ro
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    networks:
+      - brigde
+
+networks:
+  brigde:
+    external: true
+    name: brigde
