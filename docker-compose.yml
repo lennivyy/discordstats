@@ -59,7 +59,7 @@ services:
     env_file:
       - ./token.env             # резолвится относительно /home/discordstats (compose dir)
     environment:
-      MC_WS_URL: ws://bridge:8765  # если у вас есть сервис "bridge" в другом файле/стеке — оставляем как есть
+      MC_WS_URL: ws://0.0.0.0:8765  # если у вас есть сервис "bridge" в другом файле/стеке — оставляем как есть
       MC_REALM: anarchy
 
       # Логи/поведение
