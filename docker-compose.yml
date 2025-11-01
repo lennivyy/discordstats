@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  discord-bot:
+    build: .
+    container_name: discordstats-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - WS_TOKEN=${WS_TOKEN:-SUPER_SECRET}
+      - WS_URL=${WS_URL:-wss://websocket.teighto.net/ws}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - discordstats-network
+
+  # Опционально: PostgreSQL для хранения данных
+  database:
+    image: postgres:15
+    container_name: discordstats-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=discordstats
+      - POSTGRES_USER=discordbot
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - discordstats-network
+
+volumes:
+  postgres_data:
+
+networks:
+  discordstats-network:
+    driver: bridge
