@@ -1,23 +1,29 @@
-# /home/discordstats/docker-compose.yml
+version: "3.9"
 
 volumes:
   autopull_work: {}   # можно удалить, если не нужен локальный кэш репо
 
+networks:
+  app:
+    name: discordstats_app
+    driver: bridge
+
 services:
   git-puller:
     build:
-      context: .
-      dockerfile: autopull/Dockerfile.autopull
+      context: ./autopull
+      dockerfile: Dockerfile.autopull
     image: discordstats/git-puller:latest
     working_dir: /work
     environment:
-      # --- репозиторий (если он нужен автопуллеру; можно указать свой) ---
+      # --- репозиторий (можно указать свой) ---
       GIT_URL: "${REPO_URL:-https://github.com/lennivyy/discordstats.git}"
       GIT_BRANCH: "${REPO_BRANCH:-main}"
       GIT_LOGIN: "${GIT_LOGIN:-}"
       GIT_TOKEN: "${GIT_TOKEN:-}"
 
       # --- путь к реальному compose на хосте ---
+      # ВАЖНО: путь абсолютный, чтобы autopull знал, что поднимать
       COMPOSE_FILE_PATH: "/home/discordstats/docker-compose.yml"
 
       # --- поведение ---
@@ -25,18 +31,25 @@ services:
       AUTO_BUILD_ON_START: "0"
       AUTOPULL_VERBOSE: "1"
       AUTOPULL_COLOR: "1"
-      # DOCKER_COMPOSE_CMD: "docker compose"
+      # DOCKER_COMPOSE_CMD: "docker compose"   # можно зафиксировать конкретную команду
+      # Усиление устойчивости:
+      AUTOPULL_RETRIES: "2"
+      RETRY_SLEEP_BASE: "2"
+      ALWAYS_REBUILD_ON_COMMIT: "1"
     volumes:
       - autopull_work:/work
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/discordstats:/home/discordstats   # ключевое: чтобы env_file и относительные пути из compose работали
+      # Ключевое: монтируем корневую директорию, чтобы env_file и относительные пути из compose работали
+      - /home/discordstats:/home/discordstats
     restart: unless-stopped
     init: true
     healthcheck:
-      test: ["CMD-SHELL", "git rev-parse HEAD >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "git -C /work rev-parse HEAD >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 10
+    networks:
+      - app
 
   discord-bot:
     build:
@@ -46,7 +59,7 @@ services:
     env_file:
       - ./token.env             # резолвится относительно /home/discordstats (compose dir)
     environment:
-      MC_WS_URL: ws://bridge:8765
+      MC_WS_URL: ws://bridge:8765  # если у вас есть сервис "bridge" в другом файле/стеке — оставляем как есть
       MC_REALM: anarchy
 
       # Логи/поведение
@@ -61,15 +74,10 @@ services:
       MC_MSPT_CHANGE_EPS: "0.05"
 
       # Каналы
-      MC_ONLINE_CHANNEL_ID: "1434239560526856242"
-      MC_TPS_CHANNEL_ID: "1434239613282680934"
+      MC_ONLINE_CHANNEL_ID: "1434258641225256992"
+      MC_TPS_CHANNEL_ID: "1434258643209027665"
     volumes:
-      - ./token.env:/app/token.env:ro  # только боту
+      - ./token.env:/app/token.env:ro
     restart: unless-stopped
     networks:
-      - brigde
-
-networks:
-  brigde:
-    external: true
-    name: brigde
+      - app

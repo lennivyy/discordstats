@@ -1,15 +1,22 @@
-# Автопуллер: Python + git + docker-cli (+ compose plugin)
-FROM python:3.12-alpine
+# Лёгкая база с питоном
+FROM python:3.11-alpine
 
-RUN apk add --no-cache \
-      git \
-      docker-cli \
-      docker-cli-compose \
-      bash \
-  && mkdir -p /work
+# Устанавливаем docker-cli и git для доступа к докеру (через /var/run/docker.sock)
+RUN apk add --no-cache docker-cli git bash
 
-# Скрипт автопуллера
-COPY autopull/autopull.py /usr/local/bin/autopull.py
-
+# Рабочая директория (кэш репо)
 WORKDIR /work
-ENTRYPOINT ["python", "-u", "/usr/local/bin/autopull.py"]
+
+# Копируем скрипт автопуллера
+# Ожидаем, что рядом с Dockerfile лежит файл autopull.py
+COPY autopull.py /usr/local/bin/autopull.py
+RUN chmod +x /usr/local/bin/autopull.py
+
+# По умолчанию включим цветной лог и подробности
+ENV AUTOPULL_COLOR=1 \
+    AUTOPULL_VERBOSE=1
+
+# В контейнер должны примаунтить docker.sock
+# docker run -v /var/run/docker.sock:/var/run/docker.sock ...
+
+ENTRYPOINT ["/usr/local/bin/autopull.py"]
