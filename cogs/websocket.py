@@ -1,3 +1,4 @@
+# cogs/websocket.py
 import asyncio
 import json
 import os
@@ -5,12 +6,10 @@ import time
 from typing import Optional, Dict, List
 
 import aiohttp
-from aiohttp import WSMsgType, ClientWebSocketResponse, ClientTimeout
+from aiohttp import WSMsgType, ClientWebSocketResponse
 import disnake
 from disnake.ext import commands, tasks
 
-
-# -------------------- утилиты преобразования --------------------
 
 def _to_int(*vals: object) -> int:
     for v in vals:
@@ -50,15 +49,12 @@ def _to_id(env_val: Optional[str]) -> Optional[int]:
         return None
 
 
-# ========================== COG ===========================
-
 class MinecraftCog(commands.Cog):
     """
-    Надёжное подключение к локальному bridge по WebSocket (aiohttp).
+    Подключение к локальному bridge через aiohttp.ws_connect.
     ДВА голосовых канала: ONLINE и TPS.
-    - Исправлена гонка реконнектов (старый listener больше не закрывает новый сокет).
-    - Включён heartbeat/ping (autoping), idle-watchdog стал защитным fallback.
-    - Каналы принудительно обновляются при оффлайне/онлайне и при реальных изменениях.
+    Надёжный парсинг online (fallback: sum(worlds[].players)).
+    autoping=OFF, idle-watchdog по любому кадру. Принудительное переименование при изменениях.
     """
 
     # ---------------- init / config ----------------
@@ -70,19 +66,6 @@ class MinecraftCog(commands.Cog):
         self.WS_URL: str = (os.getenv("MC_WS_URL") or "ws://bridge:8765/ws").strip().rstrip("/")
         self.WS_TOKEN: str = (os.getenv("MC_WS_TOKEN") or "").replace("\r", "").replace("\n", "").strip()
         self.REALM: str = (os.getenv("MC_REALM") or "anarchy").strip()
-
-        # Heartbeat/idle настройки
-        try:
-            self.WS_HEARTBEAT_SEC: int = max(10, int(os.getenv("MC_WS_HEARTBEAT_SEC") or "30"))
-        except Exception:
-            self.WS_HEARTBEAT_SEC = 30
-
-        # Пользовательский idle (если зададут слишком маленький — задираем безопасно)
-        try:
-            _idle_env = int(os.getenv("MC_IDLE_RECONNECT_SEC") or "180")
-        except Exception:
-            _idle_env = 180
-        self.IDLE_RECONNECT_SEC: int = max(60, _idle_env, self.WS_HEARTBEAT_SEC * 4)
 
         # Logs
         self.DEBUG: bool = (os.getenv("MC_WS_DEBUG") or "0").strip().lower() in {"1", "true", "yes"}
@@ -125,6 +108,12 @@ class MinecraftCog(commands.Cog):
         self._last_frame_ts: float = 0.0
         self._last_stats_ts: float = 0.0
 
+        # Idle reconnect threshold (по любому кадру)
+        try:
+            self.IDLE_RECONNECT_SEC: int = max(20, int(os.getenv("MC_IDLE_RECONNECT_SEC") or "120"))
+        except Exception:
+            self.IDLE_RECONNECT_SEC = 120
+
         # Discord entities
         self.category_id: Optional[int] = self.ENV_CATEGORY_ID
         self.voice_channel_id_online: Optional[int] = self.ENV_ONLINE_ID
@@ -159,12 +148,10 @@ class MinecraftCog(commands.Cog):
         self.idle_watchdog.start()
 
         if self.DEBUG:
-            print(
-                f"[MinecraftCog] DEBUG on, trunc={self.TRUNC}, json_log={'on' if self.LOG_JSON else 'off'}, "
-                f"debounce={self.CHANNEL_UPDATE_MIN_SEC}s, show_mspt={self.CHANNEL_SHOW_MSPT}, "
-                f"heartbeat={self.WS_HEARTBEAT_SEC}s, idle_reconnect={self.IDLE_RECONNECT_SEC}s, "
-                f"force_on_change={self.FORCE_ON_CHANGE}, eps[tps]={self.TPS_CHANGE_EPS}, eps[mspt]={self.MSPT_CHANGE_EPS}"
-            )
+            print(f"[MinecraftCog] DEBUG on, trunc={self.TRUNC}, json_log={'on' if self.LOG_JSON else 'off'}, "
+                  f"debounce={self.CHANNEL_UPDATE_MIN_SEC}s, show_mspt={self.CHANNEL_SHOW_MSPT}, "
+                  f"idle_reconnect={self.IDLE_RECONNECT_SEC}s, force_on_change={self.FORCE_ON_CHANGE}, "
+                  f"eps[tps]={self.TPS_CHANGE_EPS}, eps[mspt]={self.MSPT_CHANGE_EPS}")
 
     # ---------------- lifecycle helpers ----------------
 
@@ -176,28 +163,21 @@ class MinecraftCog(commands.Cog):
                 pass
         if self._listener_task and not self._listener_task.done():
             self._listener_task.cancel()
-        asyncio.create_task(self._close_ws())  # безопасно закроет текущий сокет
+        asyncio.create_task(self._close_ws())
 
     async def _ensure_session(self):
         if self._session is None or self._session.closed:
-            timeout = ClientTimeout(total=None)  # без общего дедлайна
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = aiohttp.ClientSession()
 
-    async def _close_ws(self, ws: Optional[ClientWebSocketResponse] = None):
-        """
-        Закрыть конкретный сокет (если передан) или текущий self._ws.
-        ВАЖНО: не закрывать «чужой» новый сокет из старого listener'а.
-        """
-        target = ws or self._ws
+    async def _close_ws(self):
         try:
-            if target is not None and not target.closed:
-                await target.close()
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.close()
         except Exception:
             pass
         finally:
-            if target is self._ws:
-                self._ws = None
-                self.connected = False
+            self._ws = None
+            self.connected = False
 
     # ---------------- one-shot channel ensure ----------------
 
@@ -288,23 +268,17 @@ class MinecraftCog(commands.Cog):
 
         headers = {"Authorization": f"Bearer {self.WS_TOKEN}"} if self.WS_TOKEN else None
 
-        # На всякий случай закрываем старый сокет, если завис
-        if self._ws is not None and not self._ws.closed:
-            await self._close_ws(self._ws)
-
         for url in self._url_candidates():
             try:
                 ws = await self._session.ws_connect(
                     url,
                     headers=headers,
-                    autoping=True,
-                    heartbeat=self.WS_HEARTBEAT_SEC,
+                    heartbeat=None,   # критично: не шлём ping
+                    autoping=False,   # и не ждём pong
                     timeout=15.0,
-                    receive_timeout=None,          # управление временем тишины делаем сами
+                    receive_timeout=None,
                     max_msg_size=8 * 1024 * 1024,
                 )
-
-                # Успех — фиксируем ТЕКУЩИЙ сокет и запускаем listener, привязанный к этому ws
                 self._ws = ws
                 self.connected = True
                 self._last_frame_ts = time.time()
@@ -313,11 +287,11 @@ class MinecraftCog(commands.Cog):
                 status = getattr(ws, "response", None).status if getattr(ws, "response", None) else "?"
                 h = getattr(ws, "response", None).headers if getattr(ws, "response", None) else {}
                 h_preview = {k: v for k, v in list(h.items())[:6]} if h else {}
-                print(f"[MinecraftCog] WebSocket подключён: {url} (realm={self.REALM}) status={status} headers={h_preview} (autoping=ON, heartbeat={self.WS_HEARTBEAT_SEC}s)")
+                print(f"[MinecraftCog] WebSocket подключён: {url} (realm={self.REALM}) status={status} headers={h_preview} (autoping=OFF)")
 
-                # ВАЖНО: не отменяем старый listener — он сам завершится со своим ws.
-                self._listener_task = asyncio.create_task(self._listen_loop(ws))
-                self._connecting = False
+                if self._listener_task and not self._listener_task.done():
+                    self._listener_task.cancel()
+                self._listener_task = asyncio.create_task(self._listen_loop())
                 return
 
             except Exception as e:
@@ -325,10 +299,10 @@ class MinecraftCog(commands.Cog):
 
         self._connecting = False
 
-    async def _listen_loop(self, ws: ClientWebSocketResponse):
-        """
-        Слушатель ПРИВЯЗАН к конкретному ws. Закрывает только его и не трогает новый self._ws.
-        """
+    async def _listen_loop(self):
+        assert self._ws is not None
+        ws = self._ws
+        self._connecting = False
         try:
             async for msg in ws:
                 # любой кадр — сеть жива
@@ -362,7 +336,6 @@ class MinecraftCog(commands.Cog):
                     break
 
         except asyncio.CancelledError:
-            # Нормально при выгрузке
             pass
         except Exception as e:
             print(f"[MinecraftCog] Ошибка чтения WS: {e!r}")
@@ -370,24 +343,18 @@ class MinecraftCog(commands.Cog):
             code = getattr(ws, "close_code", None)
             reason = getattr(ws, "close_reason", None)
             print(f"[MinecraftCog] WS закрыт. code={code} reason={reason!r}")
+            await self._close_ws()
 
-            # Закрываем ИМЕННО ЭТОТ сокет, не трогая возможный новый
-            await self._close_ws(ws)
-
-            # Помечаем оффлайн и обновляем каналы (моментально)
-            await self._mark_offline_and_rename()
-
-    # ---------------- idle watchdog (fallback) ----------------
+    # ---------------- idle watchdog ----------------
 
     @tasks.loop(seconds=5)
     async def idle_watchdog(self):
-        # Учитывая heartbeat, это лишь дополнительная защита на случай зависания
-        if not self.connected:
+        if not self.connected or self._last_frame_ts <= 0:
             return
-        idle = time.time() - (self._last_frame_ts or 0.0)
+        idle = time.time() - self._last_frame_ts
         if idle > self.IDLE_RECONNECT_SEC:
-            print(f"[MinecraftCog] ⚠️  Нет кадров {int(idle)}s (> {self.IDLE_RECONNECT_SEC}s) — реконнект (fallback)")
-            await self._close_ws()  # listener завершитcя и инициирует оффлайн‑обновление
+            print(f"[MinecraftCog] ⚠️  Нет кадров {int(idle)}s (> {self.IDLE_RECONNECT_SEC}s) — реконнект")
+            await self._close_ws()
 
     @idle_watchdog.before_loop
     async def _before_idle(self):
@@ -397,26 +364,26 @@ class MinecraftCog(commands.Cog):
 
     def _build_online_name(self) -> str:
         s = self.server_status
-        realm = s.get("realm", self.REALM)
+        realm = s.get("realm", "realm")
         if s.get("online"):
             p = _to_int(s.get("players", 0))
             m = _to_int(s.get("max_players", 0))
-            base = f"🟢 MC {realm}: {p}/{m}" if m else f"🟢 MC {realm}: {p}"
+            base = f"🟢 Онлайн: {p}" if m else f"🟢 Онлайн: {p}"
         else:
-            base = f"🔴 MC {realm}: выключен"
+            base = f"🔴 Выключен"
         return base[:95]
 
     def _build_tps_name(self) -> str:
         s = self.server_status
-        realm = s.get("realm", self.REALM)
+        realm = s.get("realm", "realm")
         tps_1m = _to_float(s.get("tps_1m"))
         mspt = _to_float(s.get("mspt"))
         if not s.get("online"):
-            name = f"⚙️ TPS {realm}: отсутствует"
+            name = f"⚙️ TPS: Отсуствует"
         else:
             tps_part = f"{tps_1m:.1f}" if tps_1m is not None else "—"
             mspt_part = f" | {mspt:.2f} mspt" if (self.CHANNEL_SHOW_MSPT and mspt is not None) else ""
-            name = f"⚙️ TPS {realm}: {tps_part}{mspt_part}"
+            name = f"⚙️ TPS Сервера: {tps_part}"
         return name[:95]
 
     async def _update_channel_name_now(self, kind: str, force: bool = False):
@@ -462,27 +429,6 @@ class MinecraftCog(commands.Cog):
         except Exception as e:
             print(f"[MinecraftCog] Ошибка переименования канала [{kind}]: {e!r}")
 
-    # ---------------- helpers: offline/online transitions ----------------
-
-    async def _mark_offline_and_rename(self):
-        # Если давно не было статистики — считаем оффлайном
-        self.server_status.update({
-            "online": False,
-            "players": 0,
-            "tps_1m": None,
-            "tps_5m": None,
-            "tps_15m": None,
-            "mspt": None,
-        })
-        # Сбросить прошлые значения, чтобы при возврате онлайна форсировалось обновление
-        self._prev_players = None
-        self._prev_tps = None
-        self._prev_mspt = None
-
-        # Форс‑обновление обоих каналов
-        await self._update_channel_name_now("online", force=True)
-        await self._update_channel_name_now("tps", force=True)
-
     # ---------------- message handling ----------------
 
     async def _handle_message(self, payload: Dict[str, object]):
@@ -497,7 +443,7 @@ class MinecraftCog(commands.Cog):
             return
 
         realm = (payload.get("realm") or (payload.get("data") or {}).get("realm") or "").strip()
-        if realm and realm != self.REALM:
+        if realm != self.REALM:
             if self.DEBUG:
                 print(f"[MinecraftCog] WS stats for other realm='{realm}' — игнор")
             return
@@ -507,13 +453,15 @@ class MinecraftCog(commands.Cog):
         tps_obj = data.get("tps") or {}
         worlds = data.get("worlds") or []
 
-        # --- players: надёжный расчёт ---
+        # --- players: надежный расчёт ---
+        # первичный: явные поля
         p_primary = _to_int(
             data.get("players_online"),
             data.get("players_count"),
             players_obj.get("online"),
             len(data.get("players_list") or []),
         )
+        # fallback: суммируем игроков по мирам
         p_worlds = 0
         try:
             p_worlds = sum(_to_int(w.get("players", 0)) for w in worlds if isinstance(w, dict))
@@ -521,11 +469,13 @@ class MinecraftCog(commands.Cog):
             p_worlds = 0
         players = p_primary if p_primary > 0 else p_worlds
 
+        # max players
         max_players = _to_int(
             data.get("players_max"),
             players_obj.get("max"),
         )
 
+        # tps / mspt
         tps_1m = _to_float(tps_obj.get("1m"), data.get("tps_1m"))
         tps_5m = _to_float(tps_obj.get("5m"))
         tps_15m = _to_float(tps_obj.get("15m"))
@@ -579,7 +529,7 @@ class MinecraftCog(commands.Cog):
         self._prev_tps = tps_1m
         self._prev_mspt = mspt
 
-        # обновляем имена (форсим при реальном изменении/переходе оффлайн→онлайн)
+        # обновляем имена (с обходом дебаунса при реальном изменении)
         await self._update_channel_name_now("online", force=self.FORCE_ON_CHANGE and players_changed)
         await self._update_channel_name_now("tps", force=self.FORCE_ON_CHANGE and (tps_changed or mspt_changed))
 
@@ -587,13 +537,8 @@ class MinecraftCog(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def periodic_update(self):
-        # Небольшой страховочный апдейт, но без спама (дебаунс внутри)
-        try:
-            await self._update_channel_name_now("online", force=False)
-            await self._update_channel_name_now("tps", force=False)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"[MinecraftCog] periodic_update error: {e!r}")
+        await self._update_channel_name_now("online", force=True)
+        await self._update_channel_name_now("tps", force=True)
 
     @connect_websocket.before_loop
     @periodic_update.before_loop
