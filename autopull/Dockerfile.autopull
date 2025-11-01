@@ -1,0 +1,15 @@
+# Автопуллер: Python + git + docker-cli (+ compose plugin)
+FROM python:3.12-alpine
+
+RUN apk add --no-cache \
+      git \
+      docker-cli \
+      docker-cli-compose \
+      bash \
+  && mkdir -p /work
+
+# Скрипт автопуллера
+COPY autopull/autopull.py /usr/local/bin/autopull.py
+
+WORKDIR /work
+ENTRYPOINT ["python", "-u", "/usr/local/bin/autopull.py"]
