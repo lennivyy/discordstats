@@ -5,7 +5,7 @@ from disnake.ext import commands
 import os
 from dotenv import load_dotenv
 
-load_dotenv(".env")
+load_dotenv("token.env")
 
 
 def main():
@@ -72,7 +72,7 @@ def main():
 
     token = os.getenv('BOT_TOKEN')
     if not token:
-        print("Ошибка: BOT_TOKEN не найден в .env файле!")
+        print("Ошибка: BOT_TOKEN не найден в token.env файле!")
     else:
         bot.run(token)
 
