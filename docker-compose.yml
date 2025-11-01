@@ -13,23 +13,20 @@ services:
       # --- репозиторий ---
       GIT_URL: "${REPO_URL:-https://github.com/lennivyy/discordstats.git}"
       GIT_BRANCH: "${REPO_BRANCH:-main}"
-      # доступ к приватным репозиториям (опционально)
-      GIT_LOGIN: "${GIT_LOGIN:-}"         # например: lennivyy
-      GIT_TOKEN: "${GIT_TOKEN:-}"         # PAT со scope: repo
+      GIT_LOGIN: "${GIT_LOGIN:-}"
+      GIT_TOKEN: "${GIT_TOKEN:-}"
 
-      # --- путь к compose-файлу в репозитории ---
-      COMPOSE_FILE_PATH: "/work/docker-compose.yml"
+      # --- реальный путь к compose-файлу ---
+      COMPOSE_FILE_PATH: "/home/discordstats/docker-compose.yml"
 
       # --- поведение ---
-      POLL_INTERVAL: "20"                  # период опроса, сек
-      AUTO_BUILD_ON_START: "0"             # 1 = на старте сделать build/up
-      AUTOPULL_VERBOSE: "1"                # печать команд
-
-      # Можно указать явно, если нужно:
-      # DOCKER_COMPOSE_CMD: "docker compose"
+      POLL_INTERVAL: "20"
+      AUTO_BUILD_ON_START: "0"
+      AUTOPULL_VERBOSE: "1"
     volumes:
       - autopull_work:/work
       - /var/run/docker.sock:/var/run/docker.sock
+      - /home/discordstats:/home/discordstats   # чтобы контейнер видел compose-файл
     restart: unless-stopped
     init: true
     healthcheck:
@@ -37,6 +34,7 @@ services:
       interval: 30s
       timeout: 3s
       retries: 10
+
 
   discord-bot:
     build:
